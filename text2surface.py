@@ -11,6 +11,7 @@ import subprocess
 def get_args():
 	parser = ArgumentParser(description='Convert text to a surface for OpenSCAD and a .stl if desired.')
 	parser.add_argument('-l', dest='list', action='store_const', const=True, default=False, help='List available font families and exit.')
+	parser.add_argument('-n', dest='disableAA', action='store_const', const=True, default=False, help='Disable anti-aliasing. This will cause the script to extrude squares instead of using a .dat')
 	parser.add_argument('-r', dest='removebase', action='store_const', const=True, default=False, help='Remove base layer from surface. Only applies if exporting to .scad and/or .stl.')
 	parser.add_argument('-t', dest='text', type=str, default='RepRap', help='The text to convert')
 	parser.add_argument('-f', dest='fontname', type=str, default='Sans', help='The font family to use, to see a list of available fonts use "-l"')
@@ -61,7 +62,7 @@ def get_text_data(fontname, fontstyle, fontsize, text):
 	# Get the RGBA pixel data
 	return [list(surf.get_data()), width, height]
 
-def create_dat(data, zheight, filename, text):
+def create_dat(data, zheight, filename, text, disableAA):
 	# Convert RGBA data to heights
 	rgba = 4
 	white = 255*rgba
@@ -81,35 +82,51 @@ def create_dat(data, zheight, filename, text):
 		i += rgba
 
 	# To data
+	data = []
 	for line in lines:
 		textbuffer += '\n'
+		row = []
 		for pixel in line:
 			ratio = 1-float(pixel)/white
-			# Numbers (with decimal places) must be reversed so
-			# that when the entire textbuffer is reversed later,
-			# numbers will be correct
-			textbuffer += (' '+repr(ratio*zheight))[::-1]
+			if disableAA:
+				row.append(round(ratio))
+			else:
+				# Numbers (with decimal places) must be reversed so
+				# that when the entire textbuffer is reversed later,
+				# numbers will be correct
+				textbuffer += (' '+repr(ratio*zheight))[::-1]
+		if disableAA:
+			data.append(row)
 
-	# Reverse the text buffer and write that to the file
-	datfilename = filename if filename[-4:] == '.dat' else 'temp_text2surface.dat'
-	f = open(datfilename, 'w')
-	f.write(textbuffer[::-1])
-	f.close()
-	print 'Text surface for "'+text+'" is in '+datfilename
-	return datfilename
+	if not disableAA:
+		# Reverse the text buffer and write that to the file
+		datfilename = filename if filename[-4:] == '.dat' else 'temp_text2surface.dat'
+		f = open(datfilename, 'w')
+		f.write(textbuffer[::-1])
+		f.close()
+		print 'Text surface for "'+text+'" is in '+datfilename
+	return datfilename if not disableAA else data
 
-def create_scad(datfilename, filename, removebase, width, height, maxdim):
+def create_scad(data, filename, removebase, width, height, maxdim, disableAA, z):
 	if width > height:
 		scale = [float(maxdim)/width, (maxdim*float(height)/width)/height, 1]
 	else:
 		scale = [(maxdim*float(width)/height)/width, float(maxdim)/height, 1]
 	scadfilename = filename if filename[-5:] == '.scad' else 'temp_text2surface.scad'
 	f = open(scadfilename, 'w')
-	if removebase:
-		f.write('translate([0, 0, -1]) difference() {\n\t')
-	f.write('scale('+repr(scale)+') translate([0, 0, 1]) surface("'+datfilename+'", center=true, convexity=5);')
-	if removebase:
-		f.write('\n\tcube(['+repr(scale[0]*width)+', '+repr(scale[1]*height)+', 2.01], center=true);\n}')
+	if not disableAA:
+		if removebase:
+			f.write('translate([0, 0, -1]) difference() {\n\t')
+		f.write('scale('+repr(scale)+') translate([0, 0, 1]) surface("'+data+'", center=true, convexity=5);')
+		if removebase:
+			f.write('\n\ttranslate([-0.01, 0, 0]) cube(['+repr(scale[0]*width+0.02)+', '+repr(scale[1]*height)+', 2.01], center=true);\n}')
+	else:
+		f.write('linear_extrude(height='+repr(z)+') scale('+repr(scale[0:2])+') {\n')
+		for y,row in enumerate(data):
+			for x,pixel in enumerate(row):
+				if pixel == 1:
+					f.write('\ttranslate(['+repr(x)+', '+repr(y)+']) square(1);\n')
+		f.write('}')
 	f.close()
 	print 'SCAD file is '+scadfilename
 	return scadfilename
@@ -140,12 +157,12 @@ if __name__ == '__main__':
 	[data, width, height] = get_text_data(args.fontname, args.fontstyle, args.fontsize, args.text)
 
 	# Outputs a .dat file that OpenSCAD can use with the surface command
-	datfilename = create_dat(data, args.zheight, args.filename, args.text)
+	data = create_dat(data, args.zheight, args.filename, args.text, args.disableAA)
 
 	# Generate .scad and/or .stl
 	if args.filename[-5:] == '.scad' or args.filename[-4:] == '.stl':
 		# Outputs a .scad file that can be used to create a .stl file
-		scadfilename = create_scad(datfilename, args.filename, args.removebase, width, height, args.maxdim)
+		scadfilename = create_scad(data, args.filename, args.removebase, width, height, args.maxdim, args.disableAA, args.zheight)
 		if args.filename[-4:] == '.stl':
 			# Outputs a printable .stl file
 			create_stl(args.filename, scadfilename)
