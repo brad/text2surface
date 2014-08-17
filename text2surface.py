@@ -53,7 +53,8 @@ def get_text_data(fontname, fontstyle, fontsize, text):
 	if fontstyle == 'italic':
 		font.set_style(pango.STYLE_ITALIC)
 	elif fontstyle == 'bold':
-		font.set_style(pango.STYLE_OBLIQUE)
+		# pango.WEIGHT_BOLD is 700
+		font.set_weight(pango.WEIGHT_BOLD)
 	font.set_size(pango.SCALE*fontsize)
 	layout.set_font_description(font)
 	layout.set_text(text)
